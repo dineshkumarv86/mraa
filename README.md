@@ -26,6 +26,7 @@ Supported Boards
 
 X86
 ---
+* LEC-AL with IPi-SMARC (Under testing)
 * [Galileo Gen 1 - Rev D](../master/docs/galileorevd.md)
 * [Galileo Gen 2 - Rev H](../master/docs/galileorevh.md)
 * [Edison](../master/docs/edison.md)
@@ -39,6 +40,7 @@ X86
 
 ARM
 ---
+* PX30 with IPi-SMARC (Under testing)
 * [Raspberry Pi](../master/docs/raspberry_pi.md)
 * [Banana Pi](../master/docs/banana_pi.md)
 * [Beaglebone Black](../master/docs/beaglebone.md)
