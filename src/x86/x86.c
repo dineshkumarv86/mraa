@@ -107,7 +107,7 @@ mraa_x86_platform()
             } else if ((strncasecmp(line, "SAF3", strlen("SAF3") + 1) == 0) ) {
                 platform_type = MRAA_IEI_TANK;
                 plat = mraa_iei_tank();
-            } else if ((strncasecmp(line, "LEC-AL", strlen("LEC-AL") + 1) == 0) ) {
+            } else if ((strstr(line, "LEC-AL") != NULL) ) {
                 platform_type = MRAA_ADLINK_LEC_AL;
                 plat = mraa_lec_al_board();
             } else {
@@ -132,14 +132,22 @@ mraa_x86_platform()
     }
 
     if((fh = fopen("/sys/devices/virtual/dmi/id/product_name", "r")) != NULL) {
-	syslog(LOG_ERR, "Checking additional Platform support for LEC-AL iPI");
+	syslog(LOG_ERR, "Checking additional Platform support for LEC-AL/LEC-ALAI iPI");
 	if (getline(&line, &len, fh) != -1) {
 	    line[strcspn(line, "\r\n")] = 0;
+
+            if((strstr(line, "LEC-AL") != NULL)) {
+                syslog(LOG_ERR, "iPI found. starting MRAA");
+                platform_type = MRAA_ADLINK_LEC_AL;
+                plat = mraa_lec_al_board();
+	    }
+/*
 	    if ((strncasecmp(line, "LEC-AL", strlen("LEC-AL") + 1) == 0)) {
 		syslog(LOG_ERR, "LEC-AL iPI found. starting MRAA");
 		platform_type = MRAA_ADLINK_LEC_AL;
 		plat = mraa_lec_al_board();
 	    }
+*/
 	    fclose(fh);
 	}
     }
