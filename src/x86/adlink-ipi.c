@@ -54,28 +54,65 @@ struct intr_list {
 	struct intr_list *next;
 };
 
+static unsigned char regIon[16]   = {0x2A, 0x2D, 0x30, 0x33, 0x36, 0x3B, 0x40, 0x45, 0x4A, 0x4D, 0x50, 0x53, 0x56, 0x5B, 0x60, 0x65};
+
 static struct intr_list *list;
+mraa_result_t gpio_intr_init_pre(int pin);
+int sx150x_pwm_init(int pin);
+int sx150x_pwm_init1(int pin);
 
 static mraa_result_t pwm_init_raw_replace(mraa_pwm_context dev, int pin)
 {
 	char buffer[100] = {0};
 	int i, fd;
-	for(i = 0; i < 100; i++)
+
+	if(pin < 9)
 	{
-		sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/driver/adl-bmc-hwmon/modalias",i);
-		if((fd = open(buffer, O_RDONLY)) != -1)
+		if(sx150x_pwm_init(pin))
 		{
-			hwid = i;
+			return MRAA_ERROR_NO_RESOURCES;
+		}
+		if((fd = open("/sys/class/gpio/export", O_WRONLY)) != -1)
+		{
+			i = sprintf(buffer,"%d",base2 + pin);
+			write(fd, buffer, i);
 			close(fd);
-			break;
+			sprintf(buffer,"/sys/class/gpio/gpio%d/direction",base2 + pin);
+			if((fd = open(buffer, O_WRONLY)) != -1)
+			{
+				write(fd, "out", 3);
+				close(fd);
+				sprintf(buffer,"/sys/class/gpio/gpio%d/value",base2 + pin);
+				if((fd = open(buffer, O_WRONLY)) != -1)
+				{
+					write(fd, "0", 1);
+					close(fd);
+				}
+			}
+		}
+		else
+		{
+			return MRAA_ERROR_NO_RESOURCES;
 		}
 	}
-	if(i >= 100)
+	else
 	{
+		for(i = 0; i < 100; i++)
+		{
+			sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/driver/adl-bmc-hwmon/modalias",i);
+			if((fd = open(buffer, O_RDONLY)) != -1)
+			{
+				hwid = i;
+				break;
+			}
+		}
 		close(fd);
-		return MRAA_ERROR_NO_RESOURCES;
+		if(i >= 100)
+		{
+			return MRAA_ERROR_NO_RESOURCES;
+		}
 	}
-	close(fd);
+
 	return MRAA_SUCCESS;
 }
 
@@ -89,20 +126,42 @@ static float pwm_read_replace(mraa_pwm_context dev)
 {
 	int fd, count = 0;
 	char buffer[100] = {0};
-	sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_auto_point4_pwm",hwid);
-	if((fd = open(buffer, O_RDONLY)) == -1)
-	{
-		return 0;
-	}
+	unsigned char rx_tx_buf[3] = {0};
 
-	if((count = read(fd,buffer,3)) != 0)
+	if(dev->pin < 9)
 	{
-		buffer[count] = 0;
-	}
+		if(_fd == -1)
+		{
+			return 0;
+		}
 
-	close(fd);
-	int cycle = (atoi(buffer) * m_period)/100;
-	return cycle;
+		rx_tx_buf[0] = regIon[dev->pin];
+		if(write(_fd, &(rx_tx_buf[0]), 1) == 1)
+		{
+			if(read(_fd, &(rx_tx_buf[1]), 1) == 1)
+			{
+				return ((rx_tx_buf[1] / 2.55)* 2000);
+			}
+		}	
+	}
+	else if(dev->pin == 9)
+	{
+		sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_auto_point4_pwm",hwid);
+		if((fd = open(buffer, O_RDONLY)) == -1)
+		{
+			return 0;
+		}
+
+		if((count = read(fd,buffer,3)) != 0)
+		{
+			buffer[count] = 0;
+		}
+
+		close(fd);
+		int cycle = (atoi(buffer) * m_period) / 100;
+		return cycle;
+	}
+	return 0;
 }
 
 static mraa_result_t pwm_write_replace(mraa_pwm_context dev, float duty)
@@ -111,104 +170,151 @@ static mraa_result_t pwm_write_replace(mraa_pwm_context dev, float duty)
 
 	int count = 0;
 	char buffer[100] = {0};
-	sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_auto_point4_pwm",hwid);
+	unsigned char rx_tx_buf[3] = {0};
 
-	if((fd = open(buffer, O_RDWR)) == -1)
+	duty = duty / 2000;
+
+	if(dev->pin < 9)
 	{
-		return MRAA_ERROR_NO_RESOURCES;
+		duty = duty * 2.55;
+		if(_fd == -1)
+		{
+			return MRAA_ERROR_INVALID_RESOURCE;
+		}
+
+		rx_tx_buf[0] = regIon[dev->pin];
+		rx_tx_buf[1] = duty;
+
+		if(write(_fd, &(rx_tx_buf[0]), 2) != 2)
+		{
+			return MRAA_ERROR_NO_RESOURCES;
+		}
+		return MRAA_SUCCESS;
 	}
-
-	duty = (duty/m_period) * 100;
-
-	count = sprintf(buffer,"%d", (int)duty);
-	buffer[count] = 0;
-
-	if(write(fd, buffer, count) != count)
+	else if(dev->pin == 9)
 	{
+		sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_auto_point4_pwm",hwid);
+
+		if((fd = open(buffer, O_RDWR)) == -1)
+		{
+			return MRAA_ERROR_NO_RESOURCES;
+		}
+
+		count = sprintf(buffer,"%d", (int)duty);
+		buffer[count] = 0;
+
+		if(write(fd, buffer, count) != count)
+		{
+			close(fd);
+			return MRAA_ERROR_NO_RESOURCES;
+		}
 		close(fd);
-		return MRAA_ERROR_NO_RESOURCES;
+		return MRAA_SUCCESS;
 	}
-	close(fd);
-	return MRAA_SUCCESS;
+	return MRAA_ERROR_NO_RESOURCES;
 }
 
 static mraa_result_t pwm_enable_replace(mraa_pwm_context dev, int enable)
 {
-	char buffer[100] = {0};
-	int fd, i;
+	int fd, i, pin = dev->pin;
 
-	sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_enable",hwid);
-
-	if((fd = open(buffer, O_RDWR)) == -1)
+	if(9 > pin && 0 <= pin)
 	{
-		return MRAA_ERROR_NO_RESOURCES;
+		if(_fd != -1)
+		{
+			unsigned char rx_tx_buf[3] = {0};
+
+			if(_fd == -1)
+			{
+				return MRAA_ERROR_NO_RESOURCES;
+			}
+
+			rx_tx_buf[0] = regIon[pin];
+			rx_tx_buf[1] = 0xFF;
+			if(write(_fd, &(rx_tx_buf[0]), 2) != 2)
+			{
+				return MRAA_ERROR_NO_RESOURCES;
+			}
+		}
+		else
+		{
+			return MRAA_ERROR_NO_RESOURCES;
+		}
+
+		return MRAA_SUCCESS;
 	}
-
-	if((i = write(fd, "2", 1)) != 1)
+	if(dev->pin == 9)
 	{
-		close(fd);
-		return MRAA_ERROR_NO_RESOURCES;
-	}
-	close(fd);
+		char buffer[100] = {0};
 
-	sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_enable",hwid);
-
-	if((fd = open(buffer, O_RDWR)) == -1)
-	{
-		close(fd);
-		return MRAA_ERROR_NO_RESOURCES;
-	}
-
-	if(read(fd, buffer, 1) != 1)
-	{
-		close(fd);
-		return MRAA_ERROR_NO_RESOURCES;
-	}
-	if(buffer[0] != '2')
-	{
-		close(fd);
-		return MRAA_ERROR_NO_RESOURCES;
-	}
-
-	close(fd);
-
-	for(i = 1; i < 5; i++)
-	{
-		sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_auto_point%d_temp", hwid, i);
+		sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_enable",hwid);
 
 		if((fd = open(buffer, O_RDWR)) == -1)
 		{
 			return MRAA_ERROR_NO_RESOURCES;
 		}
 
-		if(write(fd, "0", 1) != 1)
+		if((i = write(fd, "2", 1)) != 1)
 		{
 			close(fd);
 			return MRAA_ERROR_NO_RESOURCES;
 		}
 		close(fd);
-		sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_auto_point%d_temp", hwid, i);
+
+		sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_enable",hwid);
 
 		if((fd = open(buffer, O_RDWR)) == -1)
 		{
 			return MRAA_ERROR_NO_RESOURCES;
 		}
 
-
-		if(read(fd, buffer, 1) != 1)
+		if(read(fd, buffer, 1) == 1)
 		{
-			close(fd);
-			return MRAA_ERROR_NO_RESOURCES;
+			if(buffer[0] != '2')
+			{
+				close(fd);
+				return MRAA_ERROR_NO_RESOURCES;
+			}
 		}
 		close(fd);
-		if(buffer[0] != '0')
+
+
+		for(i = 1; i < 5; i++)
 		{
-			return MRAA_ERROR_NO_RESOURCES;
+			sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_auto_point%d_temp", hwid, i);
+
+			if((fd = open(buffer, O_RDWR)) == -1)
+			{
+				return MRAA_ERROR_NO_RESOURCES;
+			}
+
+			if(write(fd, "0", 1) != 1)
+			{
+				close(fd);
+				return MRAA_ERROR_NO_RESOURCES;
+			}
+			close(fd);
+
+			sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_auto_point%d_temp", hwid, i);
+
+			if((fd = open(buffer, O_RDWR)) == -1)
+			{
+				return MRAA_ERROR_NO_RESOURCES;
+			}
+
+			if(read(fd, buffer, 1) == 1)
+			{
+				if(buffer[0] != '0')
+				{
+					close(fd);
+					return MRAA_ERROR_NO_RESOURCES;
+				}
+			}
 		}
 
+		return MRAA_SUCCESS;
 	}
-
-	return MRAA_SUCCESS;
+	return MRAA_ERROR_NO_RESOURCES;
 }
 
 	static void
@@ -236,17 +342,15 @@ gpio_get_timestamp_sysfs()
 	return (time.tv_sec * 1e6 + time.tv_usec);
 }
 
-void clear_sx1509x_int(void)
+//clearing all interrupts
+void clear_sx1509x_intr(void)
 {
 	uint8_t rx_tx_buf[10] = {0};
-	if(_fd)
-	{
-		rx_tx_buf[0] = 0x18;
-		rx_tx_buf[1] = 0xFF;
-		write(_fd, rx_tx_buf, 2);
-		rx_tx_buf[0] = 0x19;
-		write(_fd, rx_tx_buf, 2);
-	}
+
+	rx_tx_buf[0] = 0x18;
+	rx_tx_buf[1] = 0xFF;
+	rx_tx_buf[2] = 0xFF;
+	write(_fd, rx_tx_buf, 3);
 }
 
 
@@ -263,13 +367,13 @@ static mraa_result_t gpio_wait_interrupt(int fds[], int num_fds, mraa_gpio_event
 	lseek(fds[0], 0, SEEK_SET);
 	read(fds[0], &c, 1);
 
-	clear_sx1509x_int();
+	clear_sx1509x_intr();
 
 	// Wait for it forever or until pthread_cancel
 	// poll is a cancelable point like sleep()
 	poll(pfd, num_fds, -1);
 
-	clear_sx1509x_int();
+	clear_sx1509x_intr();
 
 	if (pfd[0].revents & POLLPRI) {
 		read(fds[0], &c, 1);
@@ -327,57 +431,11 @@ gpio_interrupt_handler(void* arg)
 	}
 }
 
-
-
-// utility function to setup pin mapping of boards
-static mraa_result_t mraa_lec_al_set_pininfo(mraa_board_t* board, int mraa_index, char* name,
-		mraa_pincapabilities_t caps, int sysfs_pin)
-{
-	if (mraa_index < board->phy_pin_count) {
-		mraa_pininfo_t* pin_info = &board->pins[mraa_index];
-		strncpy(pin_info->name, name, MRAA_PIN_NAME_SIZE);
-		pin_info->capabilities = caps;
-		if (caps.gpio) {
-			pin_info->gpio.pinmap = sysfs_pin;
-			pin_info->gpio.mux_total = 0;
-		}
-		if (caps.i2c) {
-			pin_info->i2c.pinmap = 1;
-			pin_info->i2c.mux_total = 0;
-		}
-
-		if (caps.uart) {
-			pin_info->uart.mux_total = 0;
-		}
-		if (caps.spi) {
-			pin_info->spi.mux_total = 0;
-		}
-		return MRAA_SUCCESS;
-	}
-	return MRAA_ERROR_INVALID_RESOURCE;
-}
-
-static mraa_result_t mraa_lec_al_get_pin_index(mraa_board_t* board, char* name, int* pin_index)
-{
-	int i;
-	for (i = 0; i < board->phy_pin_count; ++i) {
-		if (strncmp(name, board->pins[i].name, MRAA_PIN_NAME_SIZE) == 0) {
-			*pin_index = i;
-			return MRAA_SUCCESS;
-		}
-	}
-
-	syslog(LOG_CRIT, "lec_al: Failed to find pin name %s", name);
-
-	return MRAA_ERROR_INVALID_RESOURCE;
-}
-
 static void internal_isr(void*args)
 {
 	struct intr_list *it = list;
 	int fps;
 	unsigned char c;
-	syslog(LOG_CRIT, "lec_al: Failed to find pin name ");
 
 	/* Is this pin on a subplatform? Do nothing... */
 	while (it) {
@@ -397,7 +455,7 @@ static void internal_isr(void*args)
 	}
 }
 
-
+// configuring main interrupt line for sx1509q it will create common isr routine for all gpio's
 static mraa_result_t intr_init()
 {
 	int fd;
@@ -457,7 +515,6 @@ static mraa_result_t intr_init()
 		return MRAA_ERROR_INVALID_RESOURCE;
 	}
 
-
 	// we only allow one isr per mraa_gpio_context
 	if (gpio->thread_id != 0) {
 		return MRAA_ERROR_NO_RESOURCES;
@@ -497,6 +554,7 @@ static mraa_result_t intr_init()
 	return MRAA_SUCCESS;
 }
 
+// it will clean the resources, MRAA created by advanced callback functions
 static mraa_result_t gpio_close_pre(mraa_gpio_context dev)
 {
 	struct intr_list *ptr, *last;
@@ -551,6 +609,7 @@ static mraa_result_t gpio_close_pre(mraa_gpio_context dev)
 	return MRAA_SUCCESS;
 }
 
+//callb ack routine for isr registration
 static mraa_result_t gpio_isr_replace(mraa_gpio_context dev, mraa_gpio_edge_t mode, void (*fptr)(void*), void* args)
 {
 	struct intr_list *node = list;
@@ -562,6 +621,8 @@ static mraa_result_t gpio_isr_replace(mraa_gpio_context dev, mraa_gpio_edge_t mo
 	{
 		intr_init();
 	}
+
+	gpio_intr_init_pre(dev->pin);
 
 	struct intr_list *ptr = list;
 
@@ -594,41 +655,305 @@ static mraa_result_t gpio_isr_replace(mraa_gpio_context dev, mraa_gpio_edge_t mo
 	return MRAA_SUCCESS;
 }
 
-int sx150x_init(int bus_num)
-{
-	char buffer[20] = {0};
-	int i;
 
-	sprintf(buffer, "/dev/i2c-%d",bus_num);
-	if((_fd = open(buffer, O_RDWR)) > -1)
+//configuring extra registers as pwm for extended gpio
+int sx150x_pwm_init(int pin)
+{
+	int i;
+	int add = (pin < 8) ? 1 : 0;
+
+	unsigned char rx_tx_buf[] = {0x0 + add, 0, 0x6 + add, 0, 0xE + add, 0, 0x20 + add, 0, 0x10 + add, 0};
+
+	if(_fd == -1)
 	{
-		if(ioctl(_fd, I2C_SLAVE_FORCE, 0x3E) > -1)
-		{
-			unsigned char rx_tx_buf[] = { 0x12, 0, 0x13, 0, 0x14, 0xFF, 0x15, 0xFF, 0x16, 0xFF, 0X17, 0xFF, 0x18, 0xFF, 0x19, 0xFF};
-			for(i = 0; i < 16; i+=2)
-			{
-				if(write(_fd, &(rx_tx_buf[i]), 2) != 2)
-				{
-					close(_fd);
-					return -1;
-				}
-			}
-		}
-		else
+		return -1;
+	}
+
+
+	for(i = 0; i < 9; i += 2)
+	{
+		if(write(_fd, &(rx_tx_buf[i]), 1) != 1)
 		{
 			return -1;
+		}
+		if(read(_fd, &(rx_tx_buf[i + 1]), 1) != 1)
+		{
+			return -1;
+		}
+
+		if((i == 2) || (i == 6))
+			rx_tx_buf[i+1] |= (1 << (pin % 8));
+		else
+			rx_tx_buf[i+1]  &= ~(1 << (pin % 8));
+
+		if(write(_fd, &(rx_tx_buf[i]), 2) != 2)
+		{
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+//configuring extra registers as interrupt for extended gpio
+mraa_result_t gpio_intr_init_pre(int pin)
+{
+	int i;
+	if(base2 + 17 > pin && (base2 - 1) < pin)
+	{
+		pin = (pin - base2);
+		int index = pin % 8;
+
+		unsigned char rx_tx_buf[] = {0x12, 0, 0, 0x14, 0, 0, 0x16, 0, 0, 0x18, 0, 0};
+
+		if(_fd == -1)
+		{
+			return MRAA_ERROR_NO_RESOURCES;
+		}
+
+		for(i = 0; i < 10; i+=3)
+		{
+			if(write(_fd, &(rx_tx_buf[i]), 1) != 1)
+			{
+				return MRAA_ERROR_NO_RESOURCES;
+			}
+			if(read(_fd, &(rx_tx_buf[i + 1]), 2) != 2)
+			{
+				return MRAA_ERROR_NO_RESOURCES;
+			}
+
+
+			if(rx_tx_buf[i] == 0x12)
+			{
+				if(pin < 8)
+					rx_tx_buf[i + 2] &= ~(1 << index);
+				else
+					rx_tx_buf[i + 1] &= ~(1 << index);
+			}
+			else 
+			{
+				if(rx_tx_buf[i] == 0x14 && pin < 8)
+				{
+					if(index < 4)
+						rx_tx_buf[i + 2] |= (3 << ((index % 4) * 2));
+					else
+						rx_tx_buf[i + 1] |= (3 << ((index % 4) * 2));
+				}
+				else if(rx_tx_buf[i] == 0x16)
+				{
+					if(index < 4)
+						rx_tx_buf[i + 2] |= (3 << ((index % 4) * 2));
+					else
+						rx_tx_buf[i + 1] |= (3 << ((index % 4) * 2));
+				}
+				else
+				{
+					if(pin < 8)
+						rx_tx_buf[i + 2] |= (1 << index);
+					else
+						rx_tx_buf[i + 1] |= (1 << index);
+				}
+			}
+
+			if(write(_fd, &(rx_tx_buf[i]), 3) != 3)
+			{
+				return MRAA_ERROR_NO_RESOURCES;
+			}
+		}
+	}
+	return MRAA_SUCCESS;
+}
+
+int sx150x_init(int bus_num)
+{
+	char rx_tx_buf[20] = {0};
+
+	sprintf(rx_tx_buf, "/dev/i2c-%d",bus_num);
+	if((_fd = open(rx_tx_buf, O_RDWR)) < 0)
+	{
+		return -1;
+	}
+
+	if(ioctl(_fd, I2C_SLAVE_FORCE, 0x3E) < 0)
+	{
+		return -1;
+	}
+// resetting sx1509q
+	rx_tx_buf[0] = 0x7d;
+	rx_tx_buf[1] = 0x12;
+
+	if(write(_fd, &(rx_tx_buf[0]), 2) == 2)
+	{
+		rx_tx_buf[1] = 0x34;
+		if(write(_fd, &(rx_tx_buf[0]), 2) != 2)
+		{
+			return -1;
+		}
+	}
+
+// configuring clock and misc register for PWM feature
+	rx_tx_buf[0] = 0x1E;
+	if(write(_fd, &(rx_tx_buf[0]), 1) == 1)
+	{	
+		if(read(_fd, &(rx_tx_buf[1]), 1) == 1)
+		{
+			rx_tx_buf[1] |= (1 << 6);
+			rx_tx_buf[1] |= ~(1 << 5);
+			if(write(_fd, &(rx_tx_buf[0]), 2) != 2)
+			{
+				return -1;
+			}
 		}
 	}
 	else
 	{
 		return -1;
 	}
-	return 0;
+
+	rx_tx_buf[0] = 0x1F;
+	if(write(_fd, &(rx_tx_buf[0]), 1) == 1)
+	{	
+		if(read(_fd, &(rx_tx_buf[1]), 1) == 1)
+		{
+			rx_tx_buf[1] &= ~(1 << 7);
+			rx_tx_buf[1] &= ~(1 << 3);
+			rx_tx_buf[1] &= ~((0x7) << 4);
+			rx_tx_buf[1] |= ((1 & 0x7) << 4);
+			if(write(_fd, &(rx_tx_buf[0]), 2) == 2)
+			{
+				return 0;
+			}
+		}
+	}
+
+	return -1;
+}
+
+
+// utility function to setup pin mapping of boards
+static mraa_result_t mraa_lec_al_set_pininfo(mraa_board_t* board, int mraa_index, char* name,
+		mraa_pincapabilities_t caps, int sysfs_pin)
+{
+	if (mraa_index < board->phy_pin_count) {
+		mraa_pininfo_t* pin_info = &board->pins[mraa_index];
+		strncpy(pin_info->name, name, MRAA_PIN_NAME_SIZE);
+		pin_info->capabilities = caps;
+		if (caps.gpio) {
+			pin_info->gpio.pinmap = sysfs_pin;
+			pin_info->gpio.mux_total = 0;
+		}
+		if (caps.i2c) {
+			pin_info->i2c.pinmap = 1;
+			pin_info->i2c.mux_total = 0;
+		}
+
+		if (caps.uart) {
+			pin_info->uart.mux_total = 0;
+		}
+		if (caps.spi) {
+			pin_info->spi.mux_total = 0;
+		}
+		return MRAA_SUCCESS;
+	}
+	return MRAA_ERROR_INVALID_RESOURCE;
+}
+
+static mraa_result_t mraa_lec_al_get_pin_index(mraa_board_t* board, char* name, int* pin_index)
+{
+	int i;
+	for (i = 0; i < board->phy_pin_count; ++i) {
+		if (strncmp(name, board->pins[i].name, MRAA_PIN_NAME_SIZE) == 0) {
+			*pin_index = i;
+			return MRAA_SUCCESS;
+		}
+	}
+
+	syslog(LOG_CRIT, "lec_al: Failed to find pin name %s", name);
+
+	return MRAA_ERROR_INVALID_RESOURCE;
+}
+
+static mraa_result_t gpio_init_pre(int pin)
+{
+	unsigned char rx_tx_buf[3] = {0};
+	int fd, i;
+	char buffer[50] = {0};
+
+	if(pin == base1 + 6)
+	{
+
+		if(hwid == 0)
+		{
+			pwm_init_raw_replace(NULL, 9);
+		}
+		sprintf(buffer, "/sys/class/hwmon/hwmon%d/device/fan1_enable",hwid);
+
+		if((fd = open(buffer, O_RDWR)) == -1)
+		{
+			return MRAA_ERROR_NO_RESOURCES;
+		}
+
+		if((i = write(fd, "1", 1)) != 1)
+		{
+			close(fd);
+			return MRAA_ERROR_NO_RESOURCES;
+		}
+		close(fd);
+	}
+
+	if(base2 + 17 > pin && (base2 - 1) < pin)
+	{
+		pin = pin - base2;
+
+		int add = (pin < 8) ? 1 : 0;
+
+		if(_fd == -1)
+		{
+			return MRAA_ERROR_INVALID_RESOURCE;
+		}
+
+		rx_tx_buf[0] = regIon[pin];
+		rx_tx_buf[1] = -1;
+
+		if(write(_fd, &(rx_tx_buf[0]), 2) != 2)
+		{
+			return MRAA_ERROR_NO_RESOURCES;
+		}
+
+		rx_tx_buf[0] = 0x0 + add;
+		if(write(_fd, &(rx_tx_buf[0]), 1) == 1)
+		{
+			if(read(_fd, &(rx_tx_buf[1]), 1) == 1)
+			{
+				rx_tx_buf[1] &= ~(1 < (pin % 8));
+				write(_fd, &rx_tx_buf[0], 2);
+			}
+		}
+
+		rx_tx_buf[0] = 0x20 + add;
+		if(write(_fd, &(rx_tx_buf[0]), 1) == 1)
+		{
+			if(read(_fd, &(rx_tx_buf[1]), 1) == 1)
+			{
+				rx_tx_buf[1] &= ~(1 < (pin % 8));
+				write(_fd, &rx_tx_buf[0], 2);
+				if((fd = open("/sys/class/gpio/unexport", O_WRONLY)) != -1)
+				{
+					i = sprintf(buffer,"%d",base2 + pin);
+					write(fd, buffer, i);
+					close(fd);
+				}
+				return MRAA_SUCCESS;
+			}
+		}
+		return MRAA_ERROR_INVALID_RESOURCE;
+	}
+	return MRAA_SUCCESS;
 }
 
 mraa_board_t* mraa_lec_al_board()
 {
-	int i, fd, length, i2c_bus_num;
+	int i, fd, i2c_bus_num;
 	char buffer[60] = {0};
 
 	mraa_board_t* b = (mraa_board_t*) calloc(1, sizeof (mraa_board_t));
@@ -641,9 +966,6 @@ mraa_board_t* mraa_lec_al_board()
 	b->phy_pin_count = MRAA_LEC_AL_PINCOUNT;
 	b->gpio_count = MRAA_LEC_AL_GPIOCOUNT;
 	b->chardev_capable = 0;
-
-	b->pwm_max_period = 2147483;
-	b->pwm_min_period = 1;
 
 	b->pins = (mraa_pininfo_t*) malloc(sizeof(mraa_pininfo_t) * MRAA_LEC_AL_PINCOUNT);
 	if (b->pins == NULL) {
@@ -658,6 +980,7 @@ mraa_board_t* mraa_lec_al_board()
 
 	b->adv_func->gpio_isr_replace = gpio_isr_replace;
 	b->adv_func->gpio_close_pre = gpio_close_pre;
+	b->adv_func->gpio_init_pre = gpio_init_pre;
 
 	// initializations of pwm functions
 	b->adv_func->pwm_init_raw_replace = pwm_init_raw_replace;
@@ -689,6 +1012,12 @@ mraa_board_t* mraa_lec_al_board()
 
 	syslog(LOG_NOTICE, "lec_al: base1 %d base2 %d\n", base1, base2);
 
+	// Configure PWM
+	b->pwm_dev_count = 0;
+	b->pwm_default_period = 5000;
+	b->pwm_max_period = 218453;
+	b->pwm_min_period = 1;
+
 	mraa_lec_al_set_pininfo(b, 1,  "3v3",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
 	mraa_lec_al_set_pininfo(b, 2,  "5v",         (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
 	mraa_lec_al_set_pininfo(b, 3,  "I2C0_DAT",   (mraa_pincapabilities_t){ 1, 0, 0, 0, 0, 1, 0, 0 }, -1);
@@ -700,7 +1029,10 @@ mraa_board_t* mraa_lec_al_board()
 	mraa_lec_al_set_pininfo(b, 9,  "GND",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
 	mraa_lec_al_set_pininfo(b, 10, "UART_RXD",   (mraa_pincapabilities_t){ 1, 0, 0, 0, 0, 0, 0, 1 }, -1);
 	mraa_lec_al_set_pininfo(b, 11, "GPIO05",     (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base1 + 5);
-	mraa_lec_al_set_pininfo(b, 12, "GPIO06",     (mraa_pincapabilities_t){ 1, 0, 1, 0, 0, 0, 0, 0 }, base1 + 6);
+	mraa_lec_al_set_pininfo(b, 12, "GPIO06",     (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base1 + 6);
+	b->pins[12].pwm.parent_id = 0;
+	b->pins[12].pwm.pinmap = 9;
+	b->pwm_dev_count++;
 	mraa_lec_al_set_pininfo(b, 13, "GPIO07",     (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base1 + 7);
 	mraa_lec_al_set_pininfo(b, 14, "GND",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
 	mraa_lec_al_set_pininfo(b, 15, "GPIO08",     (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base1 + 8);
@@ -717,6 +1049,47 @@ mraa_board_t* mraa_lec_al_board()
 	mraa_lec_al_set_pininfo(b, 26, "SPI_0_CE1",  (mraa_pincapabilities_t){ 1, 0, 0, 0, 1, 0, 0, 0 }, -1);
 	mraa_lec_al_set_pininfo(b, 27, "I2C1_DAT",   (mraa_pincapabilities_t){ 1, 0, 0, 0, 0, 1, 0, 0 }, -1);
 	mraa_lec_al_set_pininfo(b, 28, "I2C1_CK",    (mraa_pincapabilities_t){ 1, 0, 0, 0, 0, 1, 0, 0 }, -1);
+
+	mraa_lec_al_set_pininfo(b, 29, "GPIO1_0",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 0);
+	b->pins[29].pwm.parent_id = 1;
+	b->pins[29].pwm.pinmap = 0;
+	b->pwm_dev_count++;
+	mraa_lec_al_set_pininfo(b, 30, "GND",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
+	mraa_lec_al_set_pininfo(b, 31, "GPIO1_1",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 1);
+	b->pins[31].pwm.parent_id = 1;
+	b->pins[31].pwm.pinmap = 1;
+	b->pwm_dev_count++;
+	mraa_lec_al_set_pininfo(b, 32, "GPIO1_2",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 2);
+	b->pins[32].pwm.parent_id = 1;
+	b->pins[32].pwm.pinmap = 2;
+	b->pwm_dev_count++;
+	mraa_lec_al_set_pininfo(b, 33, "GPIO1_3",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 3);
+	b->pins[33].pwm.parent_id = 1;
+	b->pins[33].pwm.pinmap = 3;
+	b->pwm_dev_count++;
+	mraa_lec_al_set_pininfo(b, 34, "GND",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
+	mraa_lec_al_set_pininfo(b, 35, "GPIO1_4",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 4);
+	b->pins[35].pwm.parent_id = 1;
+	b->pins[35].pwm.pinmap = 4;
+	b->pwm_dev_count++;
+	mraa_lec_al_set_pininfo(b, 36, "GPIO1_5",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 5);
+	b->pins[36].pwm.parent_id = 1;
+	b->pins[36].pwm.pinmap = 5;
+	b->pwm_dev_count++;
+	mraa_lec_al_set_pininfo(b, 37, "GPIO1_6",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 6);
+	b->pins[37].pwm.parent_id = 1;
+	b->pins[37].pwm.pinmap = 6;
+	b->pwm_dev_count++;
+	mraa_lec_al_set_pininfo(b, 38, "GPIO1_7",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 7);
+	b->pins[38].pwm.parent_id = 1;
+	b->pins[38].pwm.pinmap = 7;
+	b->pwm_dev_count++;
+	mraa_lec_al_set_pininfo(b, 39, "GND",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
+	mraa_lec_al_set_pininfo(b, 40, "GPIO2_8",    (mraa_pincapabilities_t){ 1, 1, 1, 0, 0, 0, 0, 0 }, base2 + 8);
+	b->pins[40].pwm.parent_id = 1;
+	b->pins[40].pwm.pinmap = 8;
+	b->pwm_dev_count++;
+
 
 	// Configure UART #1 (default)
 	b->uart_dev_count = 1;
@@ -754,7 +1127,6 @@ mraa_board_t* mraa_lec_al_board()
 		if(sx150x_init(i2c_bus_num) < 0)
 		{
 			_fd = -1;
-			b->gpio_count = MRAA_LEC_AL_GPIOCOUNT - 9;
 		}
 
 		b->i2c_bus[0].bus_id = i2c_bus_num;
@@ -771,53 +1143,9 @@ mraa_board_t* mraa_lec_al_board()
 		b->i2c_bus_count++;
 	}
 
-	mraa_lec_al_set_pininfo(b, 29, "GPIO1_0",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 0);
-	mraa_lec_al_set_pininfo(b, 30, "GND",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
-	mraa_lec_al_set_pininfo(b, 31, "GPIO1_1",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 1);
-	mraa_lec_al_set_pininfo(b, 32, "GPIO1_2",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 2);
-	mraa_lec_al_set_pininfo(b, 33, "GPIO1_3",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 3);
-	mraa_lec_al_set_pininfo(b, 34, "GND",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
-	mraa_lec_al_set_pininfo(b, 35, "GPIO1_4",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 4);
-	mraa_lec_al_set_pininfo(b, 36, "GPIO1_5",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 5);
-	mraa_lec_al_set_pininfo(b, 37, "GPIO1_6",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 6);
-	mraa_lec_al_set_pininfo(b, 38, "GPIO1_7",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 7);
-	mraa_lec_al_set_pininfo(b, 39, "GND",        (mraa_pincapabilities_t){ -1, 0, 0, 0, 0, 0, 0, 0 }, -1);
-	mraa_lec_al_set_pininfo(b, 40, "GPIO2_8",    (mraa_pincapabilities_t){ 1, 1, 0, 0, 0, 0, 0, 0 }, base2 + 8);
-
 	const char* pinctrl_path = "/sys/bus/platform/drivers/broxton-pinctrl";
 	int have_pinctrl = access(pinctrl_path, F_OK) != -1;
 	syslog(LOG_NOTICE, "lec_al: kernel pinctrl driver %savailable", have_pinctrl ? "" : "un");
-
-#if 0
-	/* workaround for driving PCA9535 pins properly with iPI SMARC and sx1509x*/
-	for(i = 0; i < 16; i++)
-	{
-		if((fd = open("/sys/class/gpio/export", O_WRONLY)) != -1)
-		{
-			length = sprintf(buffer,"%d",base1 + i);
-			write(fd, buffer, length);
-			close(fd);
-			sprintf(buffer,"/sys/class/gpio/gpio%d/direction",base1 + i);
-			if((fd = open(buffer, O_RDWR)) != -1)
-			{
-				write(fd, "out", 3);
-				close(fd);
-			}
-			sprintf(buffer,"/sys/class/gpio/gpio%d/value",base1 + i);
-			if((fd = open(buffer, O_WRONLY)) != -1)
-			{
-				write(fd, "1", 2);
-				close(fd);
-			}
-		}
-		if((fd = open("/sys/class/gpio/unexport", O_WRONLY)) != -1)
-		{
-			length = sprintf(buffer,"%d",base1 + i);
-			write(fd, buffer, length);
-			close(fd);
-		}
-	}
-#endif
 
 	return b;
 
