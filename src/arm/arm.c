@@ -80,7 +80,8 @@ mraa_arm_platform()
                 // For different kernel version(s) of DE10-Nano
                 } else if (strstr(line, "Altera SOCFPGA")) {
                         platform_type = MRAA_DE_NANO_SOC;
-            }
+                }
+	    }
         }
         fclose(fh);
     }
