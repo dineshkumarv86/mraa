@@ -60,7 +60,9 @@ The procedure to describes how to install MRAA on IPi-SAMRC with Ubuntu 18.04
    $ make install
    ```
 
-**Note**: only support C / Python languages
+**Note**: 
+  * only support C / Python languages
+  * Please use root to build code
 
 
 
