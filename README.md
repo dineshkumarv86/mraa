@@ -46,7 +46,7 @@ The procedure to describes how to install MRAA on IPi-SAMRC with Ubuntu 18.04
    $ git clone https://github.com/adlink/mraa
    ```
 
-3. For LEC-AL-AI with IPi-SMARC, we have to i Insert 2C & GPIO driver
+3. For LEC-AL-AI with IPi-SMARC, we have to insert 2C & GPIO driver
 
   ```
    $ sudo modprobe i2c_i801
