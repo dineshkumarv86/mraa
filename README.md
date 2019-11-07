@@ -38,7 +38,7 @@ The procedure to describes how to install MRAA on IPi-SAMRC with Ubuntu 18.04
 
    ```
    $ sudo apt-get update
-   $ sudo apt-get install git build-essential swig3.0 python-dev python3-dev nodejs nodejs-dev cmake libjson-c-dev pkg-config
+   $ sudo apt-get install git build-essential swig3.0 python-dev python3-dev nodejs nodejs-dev cmake libjson-c-dev pkg-config libjson-c-dev
    ```
 
 2. Download RMAA code from ADLINK GitHub to your working directory.
@@ -46,6 +46,7 @@ The procedure to describes how to install MRAA on IPi-SAMRC with Ubuntu 18.04
    $ git clone https://github.com/adlink/mraa
    ```
 
+**Note:** MRAA has been verified on Ubuntu 18.04.
 
 
 #### Start to build & Install
