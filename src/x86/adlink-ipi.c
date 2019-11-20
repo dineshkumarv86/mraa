@@ -107,6 +107,7 @@ static mraa_result_t pwm_init_raw_replace(mraa_pwm_context dev, int pin)
 
 static mraa_result_t pwm_period_replace(mraa_pwm_context dev, int period)
 {
+	int test;
 	m_period = period;
 	return MRAA_SUCCESS;
 }
